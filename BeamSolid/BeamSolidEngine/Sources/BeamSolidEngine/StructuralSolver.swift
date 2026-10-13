@@ -425,15 +425,31 @@ public func solveBeam(
         return LoadNodeIdx(xa: xa, xb: xb)
     }
 
-    // Agrupamento por encadeamento simples (single-linkage) em 1D: percorre os pontos crus em
-    // ordem crescente; começa um grupo novo sempre que o vão até o ponto anterior for ≥ MIN_ELEM.
+    // Agrupamento LIMITADO em 1D: percorre os pontos crus em ordem crescente e abre um grupo novo
+    // quando o ponto dista ≥ MIN_ELEM do PRIMEIRO ponto do grupo (não do anterior). Assim nenhum
+    // ponto é deslocado mais do que MIN_ELEM — o encadeamento (single-linkage) deixava uma fila de
+    // cargas a 1,5 cm de intervalo colapsar num só ponto, a dezenas de cm de distância, e podia
+    // fundir dois apoios no mesmo nó. Dois apoios/extremos distintos no mesmo grupo => INVALID.
     let order = (0..<rawXs.count).sorted { rawXs[$0] < rawXs[$1] }
     var clusterOfRaw = [Int](repeating: 0, count: rawXs.count)
     var cid = 0
-    clusterOfRaw[order[0]] = 0
-    for k in 1..<order.count {
-        if rawXs[order[k]] - rawXs[order[k - 1]] >= MIN_ELEM { cid += 1 }
-        clusterOfRaw[order[k]] = cid
+    var clusterStart = rawXs[order[0]]
+    var clusterAnchorX: Double? = nil
+    var anchorConflict = false
+    for (k, i) in order.enumerated() {
+        let x = rawXs[i]
+        if k > 0 && x - clusterStart >= MIN_ELEM {
+            cid += 1
+            clusterStart = x
+            clusterAnchorX = nil
+        }
+        clusterOfRaw[i] = cid
+        if isAnchorRaw[i] {
+            if clusterAnchorX != nil { anchorConflict = true } else { clusterAnchorX = x }
+        }
+    }
+    if anchorConflict {
+        return invalidResult(L, ["Apoios ou extremos da viga a menos de \(Int(MIN_ELEM * 100)) cm uns dos outros: geometria não suportada pela malha de cálculo."], warnings)
     }
     var clusterAnchorValue: [Int: Double] = [:]
     var clusterFirstValue: [Int: Double] = [:]

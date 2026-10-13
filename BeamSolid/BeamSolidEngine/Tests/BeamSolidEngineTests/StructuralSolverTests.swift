@@ -174,6 +174,49 @@ final class StructuralSolverTests: XCTestCase {
         XCTAssertNotEqual(r.momentCapacity_Mrd, original.momentCapacity_Mrd)
     }
 
+    // MARK: Malha — o agrupamento de pontos próximos é limitado (sem colapso em cadeia)
+
+    func testMalha_CadeiaDeCargasNaoColapsa() {
+        // 10 cargas pontuais a 1,5 cm umas das outras. Com encadeamento ilimitado, todas eram
+        // movidas para x = 3,0 m (até 135 mm): RA = 70,0 e M = 210,0. Exato: RA = 68,42, M = 207,28.
+        let L = 6.0, Pd = 10.0 * 1.4
+        let xs = (0..<10).map { 3.0 + 0.015 * Double($0) }
+        let r = solveBeam(spanLength: L, supportType: .biapoiada, loads: xs.map { ld(.point, 10, $0) }, profile: prof, steelGrade: grade)
+        XCTAssertNotEqual(r.status, .invalid)
+        let RA = xs.reduce(0) { $0 + Pd * (1 - $1 / L) }
+        assertClose(r.reactionA, RA, "R_A cadeia", tol: 0.005)
+        var Mmax = 0.0
+        var x = 0.0
+        while x <= L {
+            let m = RA * x - xs.reduce(0) { $0 + Pd * max(0, x - $1) }
+            Mmax = max(Mmax, m)
+            x += 0.001
+        }
+        assertClose(r.maxMoment, Mmax, "M_max cadeia", tol: 0.005)
+        XCTAssertFalse(r.warnings.isEmpty, "o deslocamento de malha deve ser sinalizado")
+    }
+
+    func testMalha_ApoiosNaoSaoFundidosPorCargasIntermedias() {
+        // Contínua com A = 0 e C = 0,05 m (mínimo aceite) e duas cargas entre eles. Com encadeamento,
+        // A e C caíam no mesmo nó: PASS com R_A = 56 e R_C = 0. Correto: 28 e 28.
+        let r = solveBeam(spanLength: 6, supportType: .continua,
+                          loads: [ld(.point, 20, 0.0167), ld(.point, 20, 0.0333)],
+                          profile: prof, steelGrade: grade,
+                          supportPositions: SupportPositions(posA: 0, posB: 6, posC: 0.05))
+        XCTAssertNotEqual(r.status, .invalid)
+        assertClose(r.reactionA, 28, "R_A", tol: 0.01)
+        assertClose(r.reactionC ?? .nan, 28, "R_C", tol: 0.01)
+    }
+
+    func testMalha_ApoiosAMenosDe2cmSaoInvalidos() {
+        // Apoio/extremo a menos de 2 cm de outro: antes era movido em silêncio; agora é INVALID.
+        let r = solveBeam(spanLength: 6, supportType: .biapoiada, loads: [ld(.point, 10, 3)],
+                          profile: prof, steelGrade: grade,
+                          supportPositions: SupportPositions(posA: 0.015, posB: 6))
+        XCTAssertEqual(r.status, .invalid)
+        XCTAssertFalse(r.errors.isEmpty)
+    }
+
     // MARK: Propriedades — equilíbrio e linearidade em configurações aleatórias (PRNG determinístico)
 
     /// Mesma recorrência linear congruente usada em verify.ts (seed=12345), com aritmética
